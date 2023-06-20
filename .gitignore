@@ -1,0 +1,10 @@
+build/
+test/
+target/
+.vscode/
+*.ptx
+data/*
+imgui.ini
+static.h
+
+result/
