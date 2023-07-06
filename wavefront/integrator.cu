@@ -6,9 +6,10 @@ using namespace Pupil;
 
 void InitialPath(uint2 launch_size, cuda::RWDataView<GlobalData> &g_data, cuda::Stream *stream) noexcept;
 void HandleFirstHitEmitter(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, cuda::Stream *stream) noexcept;
-void DirectLightSampling(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, cuda::Stream *stream) noexcept;
+void HandleMiss(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, bool is_background, cuda::Stream *stream) noexcept;
+void DirectLightSampling(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, unsigned int depth, cuda::Stream *stream) noexcept;
 void EvalLight(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, cuda::Stream *stream) noexcept;
-void BsdfSampling(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, unsigned int depth, cuda::Stream *stream) noexcept;
+void BsdfSampling(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, cuda::Stream *stream) noexcept;
 void EvalBsdf(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, cuda::Stream *stream) noexcept;
 void AccumulateRadiance(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, cuda::Stream *stream) noexcept;
 }// namespace wavefront
@@ -32,10 +33,10 @@ void Integrator::Trace(cuda::RWDataView<GlobalData> &g_data, cuda::Stream *strea
     m_ray_pass->Run(reinterpret_cast<CUdeviceptr>(g_data.GetDataPtr()), m_max_wave_size, 1);
 
     HandleFirstHitEmitter(m_max_wave_size, g_data, stream);
-    // HandleMiss(m_max_wave_num, m_global_data_view, m_stream.get());
+    HandleMiss(m_max_wave_size, g_data, true, stream);
 
     for (auto depth = 1u; depth < m_max_depth; ++depth) {
-        DirectLightSampling(m_max_wave_size, g_data, stream);
+        DirectLightSampling(m_max_wave_size, g_data, depth, stream);
 
         m_shadow_ray_pass->Run(reinterpret_cast<CUdeviceptr>(g_data.GetDataPtr()), m_max_wave_size, 1);
         EvalLight(m_max_wave_size, g_data, stream);
@@ -49,13 +50,13 @@ void Integrator::Trace(cuda::RWDataView<GlobalData> &g_data, cuda::Stream *strea
                 g_data->bsdf_eval_index.Clear();
             },
             stream);
-        BsdfSampling(m_max_wave_size, g_data, depth, stream);
+        BsdfSampling(m_max_wave_size, g_data, stream);
         Pupil::cuda::LaunchKernel([g_data] __device__() { g_data->hit_index.Clear(); }, stream);
 
         m_ray_pass->Run(reinterpret_cast<CUdeviceptr>(g_data.GetDataPtr()), m_max_wave_size, 1);
 
         EvalBsdf(m_max_wave_size, g_data, stream);
-        // HandleMiss(m_max_wave_num, m_global_data_view, m_stream.get());
+        HandleMiss(m_max_wave_size, g_data, false, stream);
     }
 
     AccumulateRadiance(m_max_wave_size, g_data, stream);
@@ -116,12 +117,51 @@ void HandleFirstHitEmitter(unsigned int launch_size, Pupil::cuda::RWDataView<Glo
         stream);
 }
 
-void DirectLightSampling(unsigned int launch_size, Pupil::cuda::RWDataView<GlobalData> &g_data, Pupil::cuda::Stream *stream) noexcept {
+void HandleMiss(unsigned int launch_size, Pupil::cuda::RWDataView<GlobalData> &g_data, bool is_background, Pupil::cuda::Stream *stream) noexcept {
     Pupil::cuda::LaunchKernel1D(
-        launch_size, [g_data] __device__(unsigned int index, unsigned int size) {
+        launch_size, [g_data, is_background] __device__(unsigned int index, unsigned int size) {
+            if (index >= g_data->miss_index.GetNum() || !g_data->emitters.env) return;
+
+            auto pixel_index = g_data->miss_index[index];
+            auto &ray = g_data->cur_bounce[pixel_index].ray;
+
+            auto &env = *g_data->emitters.env.GetDataPtr();
+
+            optix::LocalGeometry env_local;
+            env_local.position = ray.origin + ray.dir;
+            optix::EmitEvalRecord emit_record;
+            env.Eval(emit_record, env_local, ray.origin);
+
+            float3 radiance = make_float3(g_data->frame_buffer[pixel_index]);
+
+            if (is_background) {
+                radiance += emit_record.radiance;
+            } else {
+                float3 throughput = g_data->throughput[pixel_index];
+                auto &bsdf_sample = g_data->bsdf_samples[pixel_index];
+
+                float mis = optix::MISWeight(bsdf_sample.pdf, emit_record.pdf);
+                radiance += throughput * emit_record.radiance * mis;
+            }
+
+            g_data->frame_buffer[pixel_index] = make_float4(radiance, 1.f);
+        },
+        stream);
+}
+
+void DirectLightSampling(unsigned int launch_size, Pupil::cuda::RWDataView<GlobalData> &g_data, unsigned int depth, Pupil::cuda::Stream *stream) noexcept {
+    Pupil::cuda::LaunchKernel1D(
+        launch_size, [g_data, depth] __device__(unsigned int index, unsigned int size) {
             if (index >= g_data->hit_index.GetNum()) return;
 
             auto pixel_index = g_data->hit_index[index];
+
+            float rr = depth > 2 ? 0.95 : 1.0;
+            if (g_data->random[pixel_index].Next() > rr)
+                return;
+
+            g_data->throughput[pixel_index] /= rr;
+
             auto &hit = g_data->hit_record[pixel_index];
             auto &random = g_data->random[pixel_index];
             auto &emitter = g_data->emitters.SelectOneEmiiter(random.Next());
@@ -159,23 +199,25 @@ void EvalLight(unsigned int launch_size, Pupil::cuda::RWDataView<GlobalData> &g_
             float3 f = eval_record.f;
             float pdf = eval_record.pdf;
             if (!optix::IsZero(f * emitter_sample.record.pdf)) {
-                float NoL = abs(dot(hit.geo.normal, emitter_sample.record.wi));
-                float mis = emitter_sample.record.is_delta ? 1.f : optix::MISWeight(emitter_sample.record.pdf, pdf);
-                emitter_sample.record.pdf *= emitter_sample.select_pdf;
+                float NoL = dot(hit.geo.normal, emitter_sample.record.wi);
+                if (NoL > 0.f) {
+                    float mis = emitter_sample.record.is_delta ? 1.f : optix::MISWeight(emitter_sample.record.pdf, pdf);
+                    emitter_sample.record.pdf *= emitter_sample.select_pdf;
 
-                float3 radiance = make_float3(g_data->frame_buffer[pixel_index]);
-                float3 throughput = g_data->throughput[pixel_index];
-                radiance += throughput * emitter_sample.record.radiance * f * NoL * mis / emitter_sample.record.pdf;
+                    float3 radiance = make_float3(g_data->frame_buffer[pixel_index]);
+                    float3 throughput = g_data->throughput[pixel_index];
+                    radiance += throughput * emitter_sample.record.radiance * f * NoL * mis / emitter_sample.record.pdf;
 
-                g_data->frame_buffer[pixel_index] = make_float4(radiance, 1.f);
+                    g_data->frame_buffer[pixel_index] = make_float4(radiance, 1.f);
+                }
             }
         },
         stream);
 }
 
-void BsdfSampling(unsigned int launch_size, Pupil::cuda::RWDataView<GlobalData> &g_data, unsigned int depth, Pupil::cuda::Stream *stream) noexcept {
+void BsdfSampling(unsigned int launch_size, Pupil::cuda::RWDataView<GlobalData> &g_data, Pupil::cuda::Stream *stream) noexcept {
     Pupil::cuda::LaunchKernel1D(
-        launch_size, [g_data, depth] __device__(unsigned int index, unsigned int size) {
+        launch_size, [g_data] __device__(unsigned int index, unsigned int size) {
             if (index >= g_data->hit_index.GetNum()) return;
             auto pixel_index = g_data->hit_index[index];
             auto &ray = g_data->cur_bounce[pixel_index].ray;
@@ -190,16 +232,7 @@ void BsdfSampling(unsigned int launch_size, Pupil::cuda::RWDataView<GlobalData> 
             if (optix::IsZero(bsdf_sample_record.f * abs(bsdf_sample_record.wi.z)) || optix::IsZero(bsdf_sample_record.pdf))
                 return;
 
-            float3 throughput = g_data->throughput[pixel_index];
-
-            throughput *= bsdf_sample_record.f * abs(bsdf_sample_record.wi.z) / bsdf_sample_record.pdf;
-
-            float rr = depth > 2 ? 0.95 : 1.0;
-            if (g_data->random[pixel_index].Next() > rr)
-                return;
-
-            throughput /= rr;
-            g_data->throughput[pixel_index] = throughput;
+            g_data->throughput[pixel_index] *= bsdf_sample_record.f * abs(bsdf_sample_record.wi.z) / bsdf_sample_record.pdf;
 
             g_data->cur_bounce[pixel_index].ray.dir = optix::ToWorld(bsdf_sample_record.wi, hit.geo.normal);
             g_data->cur_bounce[pixel_index].ray.origin = hit.geo.position;
