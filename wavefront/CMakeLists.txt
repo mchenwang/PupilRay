@@ -12,6 +12,8 @@ add_executable(${target_name}
     wavefront.h
     integrator.h
     integrator.cu
+    denoise_pass.h
+    denoise_pass.cpp
 )
 
 set_target_properties(${target_name} PROPERTIES CUDA_ARCHITECTURES ${pupil_cuda_architectures})

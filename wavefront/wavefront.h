@@ -66,6 +66,8 @@ struct GlobalData {
     Pupil::cuda::RWArrayView<Pupil::cuda::Random> random;
     Pupil::cuda::RWArrayView<float3> throughput;
 
+    Pupil::cuda::RWArrayView<float4> albedo_buffer;
+    Pupil::cuda::RWArrayView<float4> normal_buffer;
     Pupil::cuda::RWArrayView<float4> frame_buffer;
     Pupil::cuda::RWArrayView<float4> accum_buffer;
 

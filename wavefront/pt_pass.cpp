@@ -1,4 +1,5 @@
 #include "pt_pass.h"
+#include "denoise_pass.h"
 
 #include "wavefront.h"
 
@@ -132,9 +133,16 @@ void PTPass::Run() noexcept {
             m_global_data.sample_cnt = 0;
         }
 
-        auto &frame_buffer =
-            util::Singleton<GuiPass>::instance()->GetCurrentRenderOutputBuffer().shared_buffer;
-        m_global_data.frame_buffer.SetData(frame_buffer.cuda_ptr, m_frame_size.x * m_frame_size.y);
+        if (DenoisePass::s_enabled_flag) {
+            auto buf_mngr = util::Singleton<BufferManager>::instance();
+            auto result_buffer = buf_mngr->GetBuffer("pt result buffer");
+            m_global_data.frame_buffer.SetData(result_buffer->cuda_res.ptr, m_frame_size.x * m_frame_size.y);
+        } else {
+            auto &frame_buffer =
+                util::Singleton<GuiPass>::instance()->GetCurrentRenderOutputBuffer().shared_buffer;
+
+            m_global_data.frame_buffer.SetData(frame_buffer.cuda_ptr, m_frame_size.x * m_frame_size.y);
+        }
 
         CUDA_CHECK(cudaMemcpyAsync(
             reinterpret_cast<void *>(m_global_data_cuda_memory),
@@ -240,6 +248,17 @@ void PTPass::SetScene(Pupil::World *world) noexcept {
         };
         auto buffer = buf_mngr->AllocBuffer(desc);
         m_global_data.accum_buffer.SetData(buffer->cuda_res.ptr, output_pixel_num);
+
+        desc.name = "albedo buffer";
+        buffer = buf_mngr->AllocBuffer(desc);
+        m_global_data.albedo_buffer.SetData(buffer->cuda_res.ptr, output_pixel_num);
+
+        desc.name = "normal buffer";
+        buffer = buf_mngr->AllocBuffer(desc);
+        m_global_data.normal_buffer.SetData(buffer->cuda_res.ptr, output_pixel_num);
+
+        desc.name = "pt result buffer";
+        buffer = buf_mngr->AllocBuffer(desc);
     }
     {
         BufferDesc desc{
