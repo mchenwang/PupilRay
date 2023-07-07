@@ -25,7 +25,7 @@ extern "C" __global__ void __raygen__main() {
                ray.origin, ray.dir,
                0.001f, 1e16f, 0.f,
                255, OPTIX_RAY_FLAG_NONE,
-               0, 2, 0);
+               0, 1, 0);
 }
 
 extern "C" __global__ void __miss__default() {

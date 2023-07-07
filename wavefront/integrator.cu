@@ -118,12 +118,6 @@ void HandleFirstHitEmitter(unsigned int launch_size, Pupil::cuda::RWDataView<Glo
 
             g_data->normal_buffer[pixel_index] = make_float4(hit.geo.normal, 1.f);
             g_data->albedo_buffer[pixel_index] = make_float4(hit.bsdf.GetAlbedo(), 1.f);
-            // if (index >= g_data->bsdf_eval_index.GetNum()) return;
-            // auto pixel_index = g_data->bsdf_eval_index[index];
-            // auto &hit = g_data->hit_record[pixel_index];
-            // auto &emitter = g_data->emitters.areas[hit.emitter_index];
-            // auto emission = emitter.GetRadiance(hit.geo.texcoord);
-            // g_data->frame_buffer[pixel_index] = make_float4(emission, 1.f);
         },
         stream);
 }

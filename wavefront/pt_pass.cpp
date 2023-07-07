@@ -33,6 +33,7 @@ uint2 m_frame_size;
 unsigned int m_max_wave_num = 0;
 
 Pupil::Timer m_timer;
+double m_time_cost_pre_frame = 0.;
 
 unsigned int m_max_depth = 2;
 wavefront::GlobalData m_global_data;
@@ -156,6 +157,7 @@ void PTPass::Run() noexcept {
         m_global_data.sample_cnt += m_global_data.accumulated_flag;
     }
     m_timer.Stop();
+    m_time_cost_pre_frame = m_timer.ElapsedMilliseconds();
 }
 
 void PTPass::SetScene(Pupil::World *world) noexcept {
@@ -289,7 +291,7 @@ void PTPass::SetScene(Pupil::World *world) noexcept {
     }
 
     m_global_data.emitters = world->optix_scene->emitters->GetEmitterGroup();
-    m_global_data.handle = world->optix_scene->ias_handle;
+    m_global_data.handle = world->optix_scene->GetIASHandle(1, false);
 
     {
         optix::SBTDesc<SBTTypes> desc{};
@@ -308,8 +310,6 @@ void PTPass::SetScene(Pupil::World *world) noexcept {
                     hit_default_data.data.emitter_index_offset = emitter_index_offset;
                     emitter_index_offset += shape.sub_emitters_num;
                 }
-
-                desc.hit_datas.push_back(hit_default_data);
                 desc.hit_datas.push_back(hit_default_data);
             }
         }
@@ -317,7 +317,6 @@ void PTPass::SetScene(Pupil::World *world) noexcept {
             optix::ProgDataDescPair<SBTTypes::MissDataType> miss_data = {
                 .program = "__miss__default"
             };
-            desc.miss_datas.push_back(miss_data);
             desc.miss_datas.push_back(miss_data);
         }
         m_ray_pass->InitSBT(desc);
@@ -334,7 +333,6 @@ void PTPass::SetScene(Pupil::World *world) noexcept {
                 HitGroupDataRecord hit_default_data{};
                 hit_default_data.program = "__closesthit__shadow";
                 desc.hit_datas.push_back(hit_default_data);
-                desc.hit_datas.push_back(hit_default_data);
             }
         }
         {
@@ -342,25 +340,6 @@ void PTPass::SetScene(Pupil::World *world) noexcept {
                 .program = "__miss__shadow"
             };
             desc.miss_datas.push_back(miss_data);
-            desc.miss_datas.push_back(miss_data);
-        }
-
-        {
-            auto mat_programs = Pupil::material::GetMaterialProgramDesc();
-            for (auto &mat_prog : mat_programs) {
-                if (mat_prog.cc_entry) {
-                    optix::ProgDataDescPair<SBTTypes::CallablesDataType> cc_data = {
-                        .program = mat_prog.cc_entry
-                    };
-                    desc.callables_datas.push_back(cc_data);
-                }
-                if (mat_prog.dc_entry) {
-                    optix::ProgDataDescPair<SBTTypes::CallablesDataType> dc_data = {
-                        .program = mat_prog.dc_entry
-                    };
-                    desc.callables_datas.push_back(dc_data);
-                }
-            }
         }
         m_shadow_ray_pass->InitSBT(desc);
     }
@@ -369,6 +348,7 @@ void PTPass::SetScene(Pupil::World *world) noexcept {
 }
 
 void PTPass::Inspector() noexcept {
+    ImGui::Text("time cost: %.3lf ms", m_time_cost_pre_frame);
     ImGui::Text("sample count: %d", m_global_data.sample_cnt + 1);
     ImGui::InputInt("max trace depth", &m_max_depth_gui);
     m_max_depth_gui = clamp(m_max_depth_gui, 1, 128);
