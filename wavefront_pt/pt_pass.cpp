@@ -134,16 +134,16 @@ void PTPass::Run() noexcept {
             m_global_data.sample_cnt = 0;
         }
 
-        if (DenoisePass::s_enabled_flag) {
-            auto buf_mngr = util::Singleton<BufferManager>::instance();
-            auto result_buffer = buf_mngr->GetBuffer("pt result buffer");
-            m_global_data.frame_buffer.SetData(result_buffer->cuda_res.ptr, m_frame_size.x * m_frame_size.y);
-        } else {
-            auto &frame_buffer =
-                util::Singleton<GuiPass>::instance()->GetCurrentRenderOutputBuffer().shared_buffer;
+        // if (DenoisePass::s_enabled_flag) {
+        //     auto buf_mngr = util::Singleton<BufferManager>::instance();
+        //     auto result_buffer = buf_mngr->GetBuffer("pt result buffer");
+        //     m_global_data.frame_buffer.SetData(result_buffer->cuda_ptr, m_frame_size.x * m_frame_size.y);
+        // } else {
+        //     auto &frame_buffer =
+        //         util::Singleton<GuiPass>::instance()->GetCurrentRenderOutputBuffer().shared_buffer;
 
-            m_global_data.frame_buffer.SetData(frame_buffer.cuda_ptr, m_frame_size.x * m_frame_size.y);
-        }
+        //     m_global_data.frame_buffer.SetData(frame_buffer.cuda_ptr, m_frame_size.x * m_frame_size.y);
+        // }
 
         CUDA_CHECK(cudaMemcpyAsync(
             reinterpret_cast<void *>(m_global_data_cuda_memory),
@@ -181,113 +181,78 @@ void PTPass::SetScene(Pupil::World *world) noexcept {
     auto dynamic_array_buf_mngr = util::Singleton<cuda::DynamicArrayManager>::instance();
     {
         BufferDesc desc{
-            .type = EBufferType::Cuda,
             .name = "bounce buffer",
-            .size = output_pixel_num * sizeof(BounceRecord)
+            .flag = EBufferFlag::None,
+            .width = static_cast<uint32_t>(world->scene->sensor.film.w),
+            .height = static_cast<uint32_t>(world->scene->sensor.film.h),
+            .stride_in_byte = sizeof(BounceRecord)
         };
-        auto buffer = buf_mngr->AllocBuffer(desc);
-        m_global_data.cur_bounce.SetData(buffer->cuda_res.ptr, output_pixel_num);
-    }
-    {
-        BufferDesc desc{
-            .type = EBufferType::Cuda,
-            .name = "hit buffer",
-            .size = output_pixel_num * sizeof(HitRecord)
-        };
-        auto buffer = buf_mngr->AllocBuffer(desc);
-        m_global_data.hit_record.SetData(buffer->cuda_res.ptr, output_pixel_num);
-    }
-    {
-        BufferDesc desc{
-            .type = EBufferType::Cuda,
-            .name = "miss buffer",
-            .size = output_pixel_num * sizeof(MissRecord)
-        };
-        auto buffer = buf_mngr->AllocBuffer(desc);
-        m_global_data.miss_record.SetData(buffer->cuda_res.ptr, output_pixel_num);
-    }
-    {
-        BufferDesc desc{
-            .type = EBufferType::Cuda,
-            .name = "emitter samples buffer",
-            .size = output_pixel_num * sizeof(EmitterSample)
-        };
-        auto buffer = buf_mngr->AllocBuffer(desc);
-        m_global_data.emitter_samples.SetData(buffer->cuda_res.ptr, output_pixel_num);
-    }
-    {
-        BufferDesc desc{
-            .type = EBufferType::Cuda,
-            .name = "bsdf samples buffer",
-            .size = output_pixel_num * sizeof(BsdfSample)
-        };
-        auto buffer = buf_mngr->AllocBuffer(desc);
-        m_global_data.bsdf_samples.SetData(buffer->cuda_res.ptr, output_pixel_num);
-    }
-    {
-        BufferDesc desc{
-            .type = EBufferType::Cuda,
-            .name = "pixel random buffer",
-            .size = output_pixel_num * sizeof(Pupil::cuda::Random)
-        };
-        auto buffer = buf_mngr->AllocBuffer(desc);
-        m_global_data.random.SetData(buffer->cuda_res.ptr, output_pixel_num);
-    }
-    {
-        BufferDesc desc{
-            .type = EBufferType::Cuda,
-            .name = "throughput buffer",
-            .size = output_pixel_num * sizeof(float3)
-        };
-        auto buffer = buf_mngr->AllocBuffer(desc);
-        m_global_data.throughput.SetData(buffer->cuda_res.ptr, output_pixel_num);
-    }
-    {
-        BufferDesc desc{
-            .type = EBufferType::Cuda,
-            .name = "accum buffer",
-            .size = output_pixel_num * sizeof(float4)
-        };
-        auto buffer = buf_mngr->AllocBuffer(desc);
-        m_global_data.accum_buffer.SetData(buffer->cuda_res.ptr, output_pixel_num);
+        m_global_data.cur_bounce.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, output_pixel_num);
+
+        desc.name = "hit buffer";
+        desc.stride_in_byte = sizeof(HitRecord);
+        m_global_data.hit_record.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, output_pixel_num);
+
+        desc.name = "miss buffer";
+        desc.stride_in_byte = sizeof(MissRecord);
+        m_global_data.miss_record.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, output_pixel_num);
+
+        desc.name = "emitter samples buffer";
+        desc.stride_in_byte = sizeof(EmitterSample);
+        m_global_data.emitter_samples.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, output_pixel_num);
+
+        desc.name = "bsdf samples buffer";
+        desc.stride_in_byte = sizeof(BsdfSample);
+        m_global_data.bsdf_samples.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, output_pixel_num);
+
+        desc.name = "pixel random buffer";
+        desc.stride_in_byte = sizeof(Pupil::cuda::Random);
+        m_global_data.random.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, output_pixel_num);
+
+        desc.name = "throughput buffer";
+        desc.stride_in_byte = sizeof(float3);
+        m_global_data.throughput.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, output_pixel_num);
+
+        desc.name = "accum buffer";
+        desc.stride_in_byte = sizeof(float4);
+        m_global_data.accum_buffer.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, output_pixel_num);
 
         desc.name = "albedo buffer";
-        buffer = buf_mngr->AllocBuffer(desc);
-        m_global_data.albedo_buffer.SetData(buffer->cuda_res.ptr, output_pixel_num);
+        desc.flag = EBufferFlag::AllowDisplay;
+        desc.stride_in_byte = sizeof(float4);
+        m_global_data.albedo_buffer.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, output_pixel_num);
 
         desc.name = "normal buffer";
-        buffer = buf_mngr->AllocBuffer(desc);
-        m_global_data.normal_buffer.SetData(buffer->cuda_res.ptr, output_pixel_num);
+        desc.flag = EBufferFlag::AllowDisplay;
+        desc.stride_in_byte = sizeof(float4);
+        m_global_data.normal_buffer.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, output_pixel_num);
 
         desc.name = "pt result buffer";
-        buffer = buf_mngr->AllocBuffer(desc);
+        desc.flag = EBufferFlag::AllowDisplay;
+        desc.stride_in_byte = sizeof(float4);
+        m_global_data.frame_buffer.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, output_pixel_num);
     }
     {
         BufferDesc desc{
-            .type = EBufferType::Cuda,
             .name = "ray index",
-            .size = output_pixel_num * sizeof(unsigned int)
+            .flag = EBufferFlag::None,
+            .width = static_cast<uint32_t>(world->scene->sensor.film.w * world->scene->sensor.film.h),
+            .height = 1,
+            .stride_in_byte = sizeof(unsigned int)
         };
-        auto buffer = buf_mngr->AllocBuffer(desc);
-        m_global_data.ray_index = dynamic_array_buf_mngr->GetDynamicArray<unsigned int>(buffer->cuda_res.ptr, 0);
+        m_global_data.ray_index = dynamic_array_buf_mngr->GetDynamicArray<unsigned int>(buf_mngr->AllocBuffer(desc)->cuda_ptr, 0);
         desc.name = "shadow ray index";
-        buffer = buf_mngr->AllocBuffer(desc);
-        m_global_data.shadow_ray_index = dynamic_array_buf_mngr->GetDynamicArray<unsigned int>(buffer->cuda_res.ptr, 0);
+        m_global_data.shadow_ray_index = dynamic_array_buf_mngr->GetDynamicArray<unsigned int>(buf_mngr->AllocBuffer(desc)->cuda_ptr, 0);
         desc.name = "hit index";
-        buffer = buf_mngr->AllocBuffer(desc);
-        m_global_data.hit_index = dynamic_array_buf_mngr->GetDynamicArray<unsigned int>(buffer->cuda_res.ptr, 0);
+        m_global_data.hit_index = dynamic_array_buf_mngr->GetDynamicArray<unsigned int>(buf_mngr->AllocBuffer(desc)->cuda_ptr, 0);
         desc.name = "miss index";
-        buffer = buf_mngr->AllocBuffer(desc);
-        m_global_data.miss_index = dynamic_array_buf_mngr->GetDynamicArray<unsigned int>(buffer->cuda_res.ptr, 0);
+        m_global_data.miss_index = dynamic_array_buf_mngr->GetDynamicArray<unsigned int>(buf_mngr->AllocBuffer(desc)->cuda_ptr, 0);
         desc.name = "emitter sampler index";
-        buffer = buf_mngr->AllocBuffer(desc);
-        m_global_data.emitter_sample_index = dynamic_array_buf_mngr->GetDynamicArray<unsigned int>(buffer->cuda_res.ptr, 0);
+        m_global_data.emitter_sample_index = dynamic_array_buf_mngr->GetDynamicArray<unsigned int>(buf_mngr->AllocBuffer(desc)->cuda_ptr, 0);
         desc.name = "light eval index";
-        buffer = buf_mngr->AllocBuffer(desc);
-        m_global_data.light_eval_index = dynamic_array_buf_mngr->GetDynamicArray<unsigned int>(buffer->cuda_res.ptr, 0);
+        m_global_data.light_eval_index = dynamic_array_buf_mngr->GetDynamicArray<unsigned int>(buf_mngr->AllocBuffer(desc)->cuda_ptr, 0);
         desc.name = "bsdf eval index";
-        buffer = buf_mngr->AllocBuffer(desc);
-        m_global_data.bsdf_eval_index = dynamic_array_buf_mngr->GetDynamicArray<unsigned int>(buffer->cuda_res.ptr, 0);
+        m_global_data.bsdf_eval_index = dynamic_array_buf_mngr->GetDynamicArray<unsigned int>(buf_mngr->AllocBuffer(desc)->cuda_ptr, 0);
     }
 
     m_global_data.emitters = world->optix_scene->emitters->GetEmitterGroup();

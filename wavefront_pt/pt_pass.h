@@ -21,6 +21,8 @@ public:
     using OptixPass = Pupil::optix::Pass<SBTTypes, wavefront::GlobalData>;
     using ShadowOptixPass = Pupil::optix::Pass<ShadowSBTTypes, wavefront::GlobalData>;
 
+    constexpr static std::string_view PT_RESULT_BUFFER = "pt result buffer";
+
     PTPass(std::string_view name = "Wavefront Path Tracing") noexcept;
     virtual void Run() noexcept override;
     virtual void Inspector() noexcept override;
