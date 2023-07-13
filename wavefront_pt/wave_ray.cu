@@ -48,7 +48,7 @@ extern "C" __global__ void __closesthit__default() {
     if (sbt_data->emitter_index_offset >= 0) {
         hit_info.emitter_index = sbt_data->emitter_index_offset + optixGetPrimitiveIndex();
 
-        // optix_launch_params.bsdf_eval_index.Push(pixel_index);
+        optix_launch_params.bsdf_eval_index.Push(pixel_index);
     } else {
         hit_info.emitter_index = -1;
     }

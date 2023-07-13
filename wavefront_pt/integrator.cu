@@ -98,6 +98,8 @@ void InitialPath(uint2 launch_size, Pupil::cuda::RWDataView<GlobalData> &g_data,
             g_data->ray_index.Push(pixel_index);
 
             g_data->frame_buffer[pixel_index] = make_float4(0.f, 0.f, 0.f, 1.f);
+            g_data->normal_buffer[pixel_index] = make_float4(0.f, 0.f, 0.f, 1.f);
+            g_data->albedo_buffer[pixel_index] = make_float4(0.f, 0.f, 0.f, 1.f);
             g_data->throughput[pixel_index] = make_float3(1.f, 1.f, 1.f);
         },
         stream);
@@ -204,17 +206,17 @@ void EvalLight(unsigned int launch_size, Pupil::cuda::RWDataView<GlobalData> &g_
             float3 f = eval_record.f;
             float pdf = eval_record.pdf;
             if (!optix::IsZero(f * emitter_sample.record.pdf)) {
-                float NoL = dot(hit.geo.normal, emitter_sample.record.wi);
-                if (NoL > 0.f) {
-                    float mis = emitter_sample.record.is_delta ? 1.f : optix::MISWeight(emitter_sample.record.pdf, pdf);
-                    emitter_sample.record.pdf *= emitter_sample.select_pdf;
+                float NoL = abs(dot(hit.geo.normal, emitter_sample.record.wi));
+                // if (NoL > 0.f) {
+                float mis = emitter_sample.record.is_delta ? 1.f : optix::MISWeight(emitter_sample.record.pdf, pdf);
+                emitter_sample.record.pdf *= emitter_sample.select_pdf;
 
-                    float3 radiance = make_float3(g_data->frame_buffer[pixel_index]);
-                    float3 throughput = g_data->throughput[pixel_index];
-                    radiance += throughput * emitter_sample.record.radiance * f * NoL * mis / emitter_sample.record.pdf;
+                float3 radiance = make_float3(g_data->frame_buffer[pixel_index]);
+                float3 throughput = g_data->throughput[pixel_index];
+                radiance += throughput * emitter_sample.record.radiance * f * NoL * mis / emitter_sample.record.pdf;
 
-                    g_data->frame_buffer[pixel_index] = make_float4(radiance, 1.f);
-                }
+                g_data->frame_buffer[pixel_index] = make_float4(radiance, 1.f);
+                // }
             }
         },
         stream);
