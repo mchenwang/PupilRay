@@ -3,7 +3,7 @@
 #include "wavefront.h"
 
 #include "system/pass.h"
-#include "system/world.h"
+#include "world/world.h"
 
 #include "cuda/stream.h"
 #include "optix/pass.h"
@@ -24,13 +24,10 @@ public:
     constexpr static std::string_view PT_RESULT_BUFFER = "pt result buffer";
 
     PTPass(std::string_view name = "Wavefront Path Tracing") noexcept;
-    virtual void Run() noexcept override;
+    virtual void OnRun() noexcept override;
     virtual void Inspector() noexcept override;
 
-    virtual void BeforeRunning() noexcept override {}
-    virtual void AfterRunning() noexcept override {}
-
-    void SetScene(Pupil::World *) noexcept;
+    void SetScene(Pupil::world::World *) noexcept;
 
 private:
     std::unique_ptr<Pupil::cuda::Stream> m_stream = nullptr;

@@ -1,9 +1,10 @@
 #pragma once
 
-#include "optix/geometry.h"
-#include "optix/scene/camera.h"
-#include "optix/scene/emitter.h"
-#include "material/optix_material.h"
+#include "render/camera.h"
+#include "render/geometry.h"
+#include "render/emitter.h"
+#include "render/material/optix_material.h"
+#include "render/material/bsdf/bsdf.h"
 
 namespace Pupil::pt {
 struct OptixLaunchParams {

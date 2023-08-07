@@ -4,10 +4,10 @@
 #include "wavefront.h"
 
 #include "system/system.h"
-#include "system/gui.h"
+#include "system/gui/gui.h"
+#include "world/world.h"
+#include "world/render_object.h"
 
-#include "scene/scene.h"
-#include "optix/scene/scene.h"
 #include "optix/context.h"
 
 #include "cuda/util.h"
@@ -42,7 +42,8 @@ Pupil::cuda::RWDataView<wavefront::GlobalData> m_global_data_view;
 
 std::unique_ptr<wavefront::Integrator> m_integrator = nullptr;
 
-CameraHelper *m_world_camera = nullptr;
+Pupil::world::World *m_world = nullptr;
+Pupil::world::CameraHelper *m_world_camera = nullptr;
 
 void InitOptixPipeline(wavefront::PTPass::OptixPass *ray_pass, wavefront::PTPass::ShadowOptixPass *shadow_ray_pass) noexcept {
     auto module_mngr = util::Singleton<optix::ModuleManager>::instance();
@@ -65,7 +66,7 @@ void InitOptixPipeline(wavefront::PTPass::OptixPass *ray_pass, wavefront::PTPass
                                .intersect_module = sphere_module },
             };
             pipeline_desc.ray_trace_programs.push_back(sphere_ray_desc);
-            auto mat_programs = Pupil::material::GetMaterialProgramDesc();
+            auto mat_programs = Pupil::resource::GetMaterialProgramDesc();
             pipeline_desc.callable_programs.insert(pipeline_desc.callable_programs.end(), mat_programs.begin(), mat_programs.end());
         }
         ray_pass->InitPipeline(pipeline_desc);
@@ -87,7 +88,7 @@ void InitOptixPipeline(wavefront::PTPass::OptixPass *ray_pass, wavefront::PTPass
                                .intersect_module = sphere_module },
             };
             pipeline_desc.ray_trace_programs.push_back(sphere_ray_desc);
-            auto mat_programs = Pupil::material::GetMaterialProgramDesc();
+            auto mat_programs = Pupil::resource::GetMaterialProgramDesc();
             pipeline_desc.callable_programs.insert(pipeline_desc.callable_programs.end(), mat_programs.begin(), mat_programs.end());
         }
         shadow_ray_pass->InitPipeline(pipeline_desc);
@@ -114,12 +115,16 @@ PTPass::PTPass(std::string_view name) noexcept
         m_dirty = true;
     });
 
+    EventBinder<EWorldEvent::RenderInstanceUpdate>([this](void *) {
+        m_dirty = true;
+    });
+
     EventBinder<ESystemEvent::SceneLoad>([this](void *p) {
-        SetScene((World *)p);
+        SetScene((world::World *)p);
     });
 }
 
-void PTPass::Run() noexcept {
+void PTPass::OnRun() noexcept {
     if (!util::Singleton<System>::instance()->render_flag) return;
 
     m_timer.Start();
@@ -132,18 +137,8 @@ void PTPass::Run() noexcept {
             m_integrator->SetMaxRayDepth(m_max_depth);
             m_global_data.random_init_num = 0;
             m_global_data.sample_cnt = 0;
+            m_global_data.handle = m_world->GetIASHandle(1, true);
         }
-
-        // if (DenoisePass::s_enabled_flag) {
-        //     auto buf_mngr = util::Singleton<BufferManager>::instance();
-        //     auto result_buffer = buf_mngr->GetBuffer("pt result buffer");
-        //     m_global_data.frame_buffer.SetData(result_buffer->cuda_ptr, m_frame_size.x * m_frame_size.y);
-        // } else {
-        //     auto &frame_buffer =
-        //         util::Singleton<GuiPass>::instance()->GetCurrentRenderOutputBuffer().shared_buffer;
-
-        //     m_global_data.frame_buffer.SetData(frame_buffer.cuda_ptr, m_frame_size.x * m_frame_size.y);
-        // }
 
         CUDA_CHECK(cudaMemcpyAsync(
             reinterpret_cast<void *>(m_global_data_cuda_memory),
@@ -160,7 +155,8 @@ void PTPass::Run() noexcept {
     m_time_cost_pre_frame = m_timer.ElapsedMilliseconds();
 }
 
-void PTPass::SetScene(Pupil::World *world) noexcept {
+void PTPass::SetScene(Pupil::world::World *world) noexcept {
+    m_world = world;
     m_world_camera = world->camera.get();
     m_frame_size.x = static_cast<unsigned int>(world->scene->sensor.film.w);
     m_frame_size.y = static_cast<unsigned int>(world->scene->sensor.film.h);
@@ -255,8 +251,8 @@ void PTPass::SetScene(Pupil::World *world) noexcept {
         m_global_data.bsdf_eval_index = dynamic_array_buf_mngr->GetDynamicArray<unsigned int>(buf_mngr->AllocBuffer(desc)->cuda_ptr, 0);
     }
 
-    m_global_data.emitters = world->optix_scene->emitters->GetEmitterGroup();
-    m_global_data.handle = world->optix_scene->GetIASHandle(1, false);
+    m_global_data.emitters = world->emitters->GetEmitterGroup();
+    m_global_data.handle = world->GetIASHandle(1, true);
 
     {
         optix::SBTDesc<SBTTypes> desc{};
@@ -266,15 +262,16 @@ void PTPass::SetScene(Pupil::World *world) noexcept {
         {
             int emitter_index_offset = 0;
             using HitGroupDataRecord = optix::ProgDataDescPair<SBTTypes::HitGroupDataType>;
-            for (auto &&shape : world->scene->shapes) {
+            for (auto &&ro : world->GetRenderobjects()) {
                 HitGroupDataRecord hit_default_data{};
                 hit_default_data.program = "__closesthit__default";
-                hit_default_data.data.mat.LoadMaterial(shape.mat);
-                hit_default_data.data.geo.LoadGeometry(shape);
-                if (shape.is_emitter) {
+                hit_default_data.data.mat = ro->mat;
+                hit_default_data.data.geo = ro->geo;
+                if (ro->is_emitter) {
                     hit_default_data.data.emitter_index_offset = emitter_index_offset;
-                    emitter_index_offset += shape.sub_emitters_num;
+                    emitter_index_offset += ro->sub_emitters_num;
                 }
+
                 desc.hit_datas.push_back(hit_default_data);
             }
         }
@@ -294,7 +291,7 @@ void PTPass::SetScene(Pupil::World *world) noexcept {
         {
             int emitter_index_offset = 0;
             using HitGroupDataRecord = optix::ProgDataDescPair<ShadowSBTTypes::HitGroupDataType>;
-            for (auto &&shape : world->scene->shapes) {
+            for (auto &&ro : world->GetRenderobjects()) {
                 HitGroupDataRecord hit_default_data{};
                 hit_default_data.program = "__closesthit__shadow";
                 desc.hit_datas.push_back(hit_default_data);

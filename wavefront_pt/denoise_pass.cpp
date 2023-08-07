@@ -4,7 +4,7 @@
 #include "util/event.h"
 
 #include "imgui.h"
-#include "system/gui.h"
+#include "system/gui/gui.h"
 
 #include <atomic>
 
@@ -34,7 +34,7 @@ DenoisePass::DenoisePass(std::string_view name) noexcept
     m_denoiser = std::make_unique<optix::Denoiser>(m_denoiser_mode, m_stream.get());
 
     EventBinder<ESystemEvent::SceneLoad>([this](void *p) {
-        SetScene((World *)p);
+        SetScene((world::World *)p);
     });
 
     if (!s_enabled_flag) {
@@ -42,7 +42,7 @@ DenoisePass::DenoisePass(std::string_view name) noexcept
     }
 }
 
-void DenoisePass::Run() noexcept {
+void DenoisePass::OnRun() noexcept {
     if (!s_enabled_flag) return;
 
     m_timer.Start();
@@ -69,7 +69,7 @@ void DenoisePass::Run() noexcept {
     m_time_cost = m_timer.ElapsedMilliseconds();
 }
 
-void DenoisePass::SetScene(World *world) noexcept {
+void DenoisePass::SetScene(world::World *world) noexcept {
     if (world->scene->sensor.film.w != m_film_w || world->scene->sensor.film.h != m_film_h) {
         m_film_w = world->scene->sensor.film.w;
         m_film_h = world->scene->sensor.film.h;

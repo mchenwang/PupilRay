@@ -6,12 +6,12 @@
 #include "cuda/context.h"
 #include "optix/context.h"
 #include "optix/module.h"
-#include "optix/scene/mesh.h"
 
 #include "util/event.h"
 #include "system/system.h"
-#include "system/gui.h"
-#include "system/world.h"
+#include "system/gui/gui.h"
+#include "world/world.h"
+#include "world/render_object.h"
 
 extern "C" char embedded_ptx_code[];
 
@@ -21,10 +21,10 @@ bool m_accumulated_flag;
 
 size_t m_frame_cnt = 0;
 
-Pupil::optix::Scene *m_optix_scene = nullptr;
+Pupil::world::World *m_world = nullptr;
 bool m_allow_animation = false;
-Pupil::optix::RenderObject *m_s1 = nullptr;
-Pupil::optix::RenderObject *m_s2 = nullptr;
+Pupil::world::RenderObject *m_s1 = nullptr;
+Pupil::world::RenderObject *m_s2 = nullptr;
 
 double m_time_cost = 0.;
 }// namespace
@@ -40,17 +40,9 @@ PTPass::PTPass(std::string_view name) noexcept
     BindingEventCallback();
 }
 
-void PTPass::Run() noexcept {
+void PTPass::OnRun() noexcept {
     m_timer.Start();
     {
-        if (m_dirty) {
-            m_optix_launch_params.camera.SetData(m_world_camera->GetCudaMemory());
-            m_optix_launch_params.config.max_depth = m_max_depth;
-            m_optix_launch_params.config.accumulated_flag = m_accumulated_flag;
-            m_optix_launch_params.sample_cnt = 0;
-            m_dirty = false;
-        }
-
         if (m_allow_animation && (m_s1 || m_s2)) {
             m_optix_launch_params.sample_cnt = 0;
             m_optix_launch_params.random_seed = 0;
@@ -65,7 +57,16 @@ void PTPass::Run() noexcept {
                 m_s2->UpdateTransform(transform);
             }
             m_frame_cnt++;
-            m_optix_launch_params.handle = m_optix_scene->GetIASHandle(2, true);
+            m_dirty = true;
+        }
+
+        if (m_dirty) {
+            m_optix_launch_params.camera.SetData(m_world_camera->GetCudaMemory());
+            m_optix_launch_params.config.max_depth = m_max_depth;
+            m_optix_launch_params.config.accumulated_flag = m_accumulated_flag;
+            m_optix_launch_params.sample_cnt = 0;
+            m_dirty = false;
+            m_optix_launch_params.handle = m_world->GetIASHandle(2, true);
         }
 
         m_optix_pass->Run(m_optix_launch_params, m_optix_launch_params.config.frame.width,
@@ -119,7 +120,7 @@ void PTPass::InitOptixPipeline() noexcept {
         pipeline_desc.ray_trace_programs.push_back(shadow_ray_desc);
     }
     {
-        auto mat_programs = Pupil::material::GetMaterialProgramDesc();
+        auto mat_programs = Pupil::resource::GetMaterialProgramDesc();
         pipeline_desc.callable_programs.insert(
             pipeline_desc.callable_programs.end(),
             mat_programs.begin(), mat_programs.end());
@@ -127,10 +128,10 @@ void PTPass::InitOptixPipeline() noexcept {
     m_optix_pass->InitPipeline(pipeline_desc);
 }
 
-void PTPass::SetScene(World *world) noexcept {
+void PTPass::SetScene(world::World *world) noexcept {
     m_world_camera = world->camera.get();
 
-    m_optix_scene = world->optix_scene.get();
+    m_world = world;
 
     m_optix_launch_params.config.frame.width = world->scene->sensor.film.w;
     m_optix_launch_params.config.frame.height = world->scene->sensor.film.h;
@@ -169,71 +170,69 @@ void PTPass::SetScene(World *world) noexcept {
         desc.flag = EBufferFlag::None;
         m_optix_launch_params.accum_buffer.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, m_output_pixel_num);
     }
-    m_optix_launch_params.handle = world->optix_scene->GetIASHandle(2, true);
-    m_optix_launch_params.emitters = world->optix_scene->emitters->GetEmitterGroup();
+    m_optix_launch_params.handle = world->GetIASHandle(2, true);
+    m_optix_launch_params.emitters = world->emitters->GetEmitterGroup();
 
-    SetSBT(world->scene.get());
+    {
+        optix::SBTDesc<SBTTypes> desc{};
+        desc.ray_gen_data = {
+            .program = "__raygen__main"
+        };
+        {
+            int emitter_index_offset = 0;
+            using HitGroupDataRecord = optix::ProgDataDescPair<SBTTypes::HitGroupDataType>;
+            for (auto &&ro : world->GetRenderobjects()) {
+                HitGroupDataRecord hit_default_data{};
+                hit_default_data.program = "__closesthit__default";
+                hit_default_data.data.mat = ro->mat;
+                hit_default_data.data.geo = ro->geo;
+                if (ro->is_emitter) {
+                    hit_default_data.data.emitter_index_offset = emitter_index_offset;
+                    emitter_index_offset += ro->sub_emitters_num;
+                }
 
-    m_s1 = world->optix_scene->GetRenderObject("movable_s1");
-    m_s2 = world->optix_scene->GetRenderObject("movable_s2");
+                desc.hit_datas.push_back(hit_default_data);
+
+                HitGroupDataRecord hit_shadow_data{};
+                hit_shadow_data.program = "__closesthit__shadow";
+                hit_shadow_data.data.mat.type = ro->mat.type;
+                desc.hit_datas.push_back(hit_shadow_data);
+            }
+        }
+        {
+            optix::ProgDataDescPair<SBTTypes::MissDataType> miss_data = {
+                .program = "__miss__default"
+            };
+            desc.miss_datas.push_back(miss_data);
+            optix::ProgDataDescPair<SBTTypes::MissDataType> miss_shadow_data = {
+                .program = "__miss__shadow"
+            };
+            desc.miss_datas.push_back(miss_shadow_data);
+        }
+        {
+            auto mat_programs = Pupil::resource::GetMaterialProgramDesc();
+            for (auto &mat_prog : mat_programs) {
+                if (mat_prog.cc_entry) {
+                    optix::ProgDataDescPair<SBTTypes::CallablesDataType> cc_data = {
+                        .program = mat_prog.cc_entry
+                    };
+                    desc.callables_datas.push_back(cc_data);
+                }
+                if (mat_prog.dc_entry) {
+                    optix::ProgDataDescPair<SBTTypes::CallablesDataType> dc_data = {
+                        .program = mat_prog.dc_entry
+                    };
+                    desc.callables_datas.push_back(dc_data);
+                }
+            }
+        }
+        m_optix_pass->InitSBT(desc);
+    }
+
+    m_s1 = world->GetRenderObject("movable_s1");
+    m_s2 = world->GetRenderObject("movable_s2");
 
     m_dirty = true;
-}
-
-void PTPass::SetSBT(scene::Scene *scene) noexcept {
-    optix::SBTDesc<SBTTypes> desc{};
-    desc.ray_gen_data = {
-        .program = "__raygen__main"
-    };
-    {
-        int emitter_index_offset = 0;
-        using HitGroupDataRecord = optix::ProgDataDescPair<SBTTypes::HitGroupDataType>;
-        for (auto &&shape : scene->shapes) {
-            HitGroupDataRecord hit_default_data{};
-            hit_default_data.program = "__closesthit__default";
-            hit_default_data.data.mat.LoadMaterial(shape.mat);
-            hit_default_data.data.geo.LoadGeometry(shape);
-            if (shape.is_emitter) {
-                hit_default_data.data.emitter_index_offset = emitter_index_offset;
-                emitter_index_offset += shape.sub_emitters_num;
-            }
-
-            desc.hit_datas.push_back(hit_default_data);
-
-            HitGroupDataRecord hit_shadow_data{};
-            hit_shadow_data.program = "__closesthit__shadow";
-            hit_shadow_data.data.mat.type = shape.mat.type;
-            desc.hit_datas.push_back(hit_shadow_data);
-        }
-    }
-    {
-        optix::ProgDataDescPair<SBTTypes::MissDataType> miss_data = {
-            .program = "__miss__default"
-        };
-        desc.miss_datas.push_back(miss_data);
-        optix::ProgDataDescPair<SBTTypes::MissDataType> miss_shadow_data = {
-            .program = "__miss__shadow"
-        };
-        desc.miss_datas.push_back(miss_shadow_data);
-    }
-    {
-        auto mat_programs = Pupil::material::GetMaterialProgramDesc();
-        for (auto &mat_prog : mat_programs) {
-            if (mat_prog.cc_entry) {
-                optix::ProgDataDescPair<SBTTypes::CallablesDataType> cc_data = {
-                    .program = mat_prog.cc_entry
-                };
-                desc.callables_datas.push_back(cc_data);
-            }
-            if (mat_prog.dc_entry) {
-                optix::ProgDataDescPair<SBTTypes::CallablesDataType> dc_data = {
-                    .program = mat_prog.dc_entry
-                };
-                desc.callables_datas.push_back(dc_data);
-            }
-        }
-    }
-    m_optix_pass->InitSBT(desc);
 }
 
 void PTPass::BindingEventCallback() noexcept {
@@ -241,8 +240,12 @@ void PTPass::BindingEventCallback() noexcept {
         m_dirty = true;
     });
 
+    EventBinder<EWorldEvent::RenderInstanceUpdate>([this](void *) {
+        m_dirty = true;
+    });
+
     EventBinder<ESystemEvent::SceneLoad>([this](void *p) {
-        SetScene((World *)p);
+        SetScene((world::World *)p);
     });
 }
 
