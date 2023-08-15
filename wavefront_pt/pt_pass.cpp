@@ -138,6 +138,7 @@ void PTPass::OnRun() noexcept {
             m_global_data.random_init_num = 0;
             m_global_data.sample_cnt = 0;
             m_global_data.handle = m_world->GetIASHandle(1, true);
+            m_global_data.emitters = m_world->emitters->GetEmitterGroup();
         }
 
         CUDA_CHECK(cudaMemcpyAsync(

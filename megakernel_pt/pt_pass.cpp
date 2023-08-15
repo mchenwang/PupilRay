@@ -67,6 +67,7 @@ void PTPass::OnRun() noexcept {
             m_optix_launch_params.sample_cnt = 0;
             m_dirty = false;
             m_optix_launch_params.handle = m_world->GetIASHandle(2, true);
+            m_optix_launch_params.emitters = m_world->emitters->GetEmitterGroup();
         }
 
         m_optix_pass->Run(m_optix_launch_params, m_optix_launch_params.config.frame.width,
