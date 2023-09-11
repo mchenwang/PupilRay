@@ -15,3 +15,4 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${pupil_target_output_dir}/lib)
 
 add_subdirectory(megakernel_pt)
 add_subdirectory(wavefront_pt)
+add_subdirectory(wavefront_pt_soa)
