@@ -61,9 +61,6 @@ extern "C" __global__ void __closesthit__default() {
     auto bsdf = sbt_data->mat.GetLocalBsdf(geo.texcoord);
     hit.bsdf(bsdf);
 
-    optix_launch_params.normal_buffer[pixel_index] = make_float4(geo.normal, 1.f);
-    optix_launch_params.albedo_buffer[pixel_index] = make_float4(bsdf.GetAlbedo(), 1.f);
-
     int emitter_index = -1;
     if (sbt_data->emitter_index_offset >= 0) {
         emitter_index = sbt_data->emitter_index_offset + optixGetPrimitiveIndex();

@@ -40,13 +40,5 @@ struct GlobalData {
     Pupil::cuda::RWArrayView<float4> normal_buffer;
     Pupil::cuda::RWArrayView<float4> frame_buffer;
     Pupil::cuda::RWArrayView<float4> accum_buffer;
-
-    // Pupil::cuda::DynamicArray<unsigned int> ray_index;
-    // Pupil::cuda::DynamicArray<unsigned int> shadow_ray_index;
-    // Pupil::cuda::DynamicArray<unsigned int> hit_index;
-    // Pupil::cuda::DynamicArray<unsigned int> miss_index;
-    // Pupil::cuda::DynamicArray<unsigned int> emitter_sample_index;
-    // Pupil::cuda::DynamicArray<unsigned int> light_eval_index;
-    // Pupil::cuda::DynamicArray<unsigned int> bsdf_eval_index;
 };
 }// namespace wavefront

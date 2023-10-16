@@ -8,11 +8,6 @@ void InitialPath(uint2 launch_size, cuda::RWDataView<GlobalData> &g_data, cuda::
 void HandleHit(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, unsigned int depth, cuda::Stream *stream) noexcept;
 void HandleMiss(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, unsigned int depth, cuda::Stream *stream) noexcept;
 void ScatterRays(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, unsigned int depth, cuda::Stream *stream) noexcept;
-// void HandleFirstHitEmitter(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, cuda::Stream *stream) noexcept;
-// void DirectLightSampling(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, unsigned int depth, cuda::Stream *stream) noexcept;
-// void EvalLight(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, cuda::Stream *stream) noexcept;
-// void BsdfSampling(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, cuda::Stream *stream) noexcept;
-// void EvalBsdf(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, cuda::Stream *stream) noexcept;
 void AccumulateRadiance(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, cuda::Stream *stream) noexcept;
 }// namespace wavefront
 
@@ -30,13 +25,13 @@ void Integrator::Trace(cuda::RWDataView<GlobalData> &g_data, cuda::Stream *strea
 
     InitialPath(m_frame_size, g_data, stream);
     // for (auto depth = 0u; depth <= 0; ++depth) {
-    for (auto depth = 0u; depth <= m_max_depth; ++depth) {
+    for (auto depth = 0u; depth < m_max_depth; ++depth) {
         m_ray_pass->Run(reinterpret_cast<CUdeviceptr>(g_data.GetDataPtr()), m_max_wave_size, 1);
         HandleHit(m_max_wave_size, g_data, depth, stream);
         HandleMiss(m_max_wave_size, g_data, depth, stream);
         Pupil::cuda::LaunchKernel([g_data] __device__() { g_data->ray_queue.Clear(); }, stream);
 
-        if (depth == m_max_depth) break;
+        if (depth == m_max_depth - 1) break;
 
         ScatterRays(m_max_wave_size, g_data, depth, stream);
         m_shadow_ray_pass->Run(reinterpret_cast<CUdeviceptr>(g_data.GetDataPtr()), m_max_wave_size, 1);
@@ -95,6 +90,19 @@ void InitialPath(uint2 launch_size, Pupil::cuda::RWDataView<GlobalData> &g_data,
 }
 
 void HandleHit(unsigned int launch_size, cuda::RWDataView<GlobalData> &g_data, unsigned int depth, cuda::Stream *stream) noexcept {
+    if (depth == 0) {
+        Pupil::cuda::LaunchKernel1D(
+            launch_size, [g_data, depth] __device__(unsigned int index, unsigned int size) {
+                if (index >= g_data->hit_queue.GetNum()) return;
+
+                auto hit = g_data->hit_queue[index];
+                const auto pixel_index = hit.pixel_index();
+
+                g_data->normal_buffer[pixel_index] = make_float4(hit.geo().normal, 1.f);
+                g_data->albedo_buffer[pixel_index] = make_float4(hit.bsdf().GetAlbedo(), 1.f);
+            },
+            stream);
+    }
     Pupil::cuda::LaunchKernel1D(
         launch_size, [g_data, depth] __device__(unsigned int index, unsigned int size) {
             if (index >= g_data->hit_emitter_queue.GetNum()) return;
