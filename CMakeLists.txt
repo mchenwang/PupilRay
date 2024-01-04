@@ -13,6 +13,9 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${pupil_target_output_dir}/bin)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${pupil_target_output_dir}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${pupil_target_output_dir}/lib)
 
-add_subdirectory(megakernel_pt)
-add_subdirectory(wavefront_pt)
-add_subdirectory(wavefront_pt_soa)
+# add_subdirectory(megakernel_pt)
+# add_subdirectory(wavefront_pt)
+# add_subdirectory(wavefront_pt_soa)
+# add_subdirectory(test)
+
+add_subdirectory(wavefront)
