@@ -12,16 +12,16 @@ namespace wf {
 
 namespace wf {
     void Integrator::Trace(cuda::RWDataView<GlobalData>& g_data, Pupil::cuda::Stream* stream) noexcept {
-        Pupil::cuda::LaunchKernel([g_data] __device__() { g_data->ray_index.Clear(); }, stream);
+        Pupil::cuda::LaunchKernel([g_data] __device__() { g_data->depth = 0; g_data->path_record.Clear(); }, stream);
         InitialPath(m_frame_size, g_data, stream);
 
         for (int depth = 0; depth < m_max_depth; ++depth) {
-            Pupil::cuda::LaunchKernel([g_data] __device__() { g_data->hit_index.Clear(); }, stream);
+            Pupil::cuda::LaunchKernel([g_data] __device__() { g_data->hit_record.Clear(); }, stream);
 
             m_ray_pass->Run(reinterpret_cast<CUdeviceptr>(g_data.GetDataPtr()), m_max_wave_size, 1);
             if (depth == m_max_depth - 1) break;
 
-            Pupil::cuda::LaunchKernel([g_data] __device__() { g_data->ray_index.Clear(); g_data->shadow_ray_index.Clear(); }, stream);
+            Pupil::cuda::LaunchKernel([g_data] __device__() {  g_data->depth++; g_data->path_record.Clear(); g_data->nee_record.Clear(); }, stream);
 
             ScatterRays(m_max_wave_size, g_data, stream);
             m_shadow_ray_pass->Run(reinterpret_cast<CUdeviceptr>(g_data.GetDataPtr()), m_max_wave_size, 1);
@@ -34,9 +34,9 @@ namespace wf {
             launch_size, [g_data] __device__(uint2 index, uint2 size) {
                 const unsigned int pixel_index = index.y * size.x + index.x;
                 auto&              camera      = g_data->camera;
-                g_data->random[pixel_index].Init(4, pixel_index, g_data->random_seed);
+                cuda::Random       random;
+                random.Init(4, pixel_index, g_data->random_seed);
 
-                auto&        random          = g_data->random[pixel_index];
                 const float2 subpixel_jitter = random.Next2();
 
                 const float2 subpixel =
@@ -59,12 +59,14 @@ namespace wf {
                     camera.camera_to_world.r1.w,
                     camera.camera_to_world.r2.w);
 
-                g_data->path_record[pixel_index].ray_dir    = ray_direction;
-                g_data->path_record[pixel_index].ray_origin = ray_origin;
-                g_data->ray_index.Push(pixel_index);
+                auto new_camera_ray_path = g_data->path_record.Alloc();
+                new_camera_ray_path.ray_dir(ray_direction);
+                new_camera_ray_path.ray_origin(ray_origin);
+                new_camera_ray_path.throughput(make_float3(1.f, 1.f, 1.f));
+                new_camera_ray_path.random_seed(random.GetSeed());
+                new_camera_ray_path.pixel_index(pixel_index);
 
                 g_data->frame_buffer[pixel_index] = make_float4(0.f, 0.f, 0.f, 1.f);
-                g_data->throughput[pixel_index]   = make_float3(1.f, 1.f, 1.f);
             },
             stream);
     }
@@ -72,15 +74,16 @@ namespace wf {
     void ScatterRays(unsigned int launch_size, cuda::RWDataView<GlobalData>& g_data, cuda::Stream* stream) noexcept {
         Pupil::cuda::LaunchKernel1D(
             launch_size, [g_data] __device__(unsigned int launch_index, unsigned int size) {
-                if (launch_index >= g_data->hit_index.GetNum()) return;
-                const auto pixel_index = g_data->hit_index[launch_index];
-                auto&      random      = g_data->random[pixel_index];
-                auto&      hit         = g_data->hit_record[pixel_index];
-                auto       ray_dir     = g_data->path_record[pixel_index].ray_dir;
-                auto       throughput  = g_data->throughput[pixel_index];
+                if (launch_index >= g_data->hit_record.GetNum()) return;
+                auto       record      = g_data->hit_record[launch_index];
+                const auto pixel_index = record.pixel_index();
+                auto       ray_dir     = record.ray_dir();
+                auto       throughput  = record.throughput();
+                auto       bsdf        = record.mat();
+                auto       geo         = record.geo();
 
-                auto& geo  = hit.geo;
-                auto& bsdf = hit.mat;
+                cuda::Random random;
+                random.SetSeed(record.random_seed());
 
                 // direct lighting
                 {
@@ -101,17 +104,21 @@ namespace wf {
                     float emit_pdf = emitter_sample_record.pdf * emitter->select_probability;
                     if (optix::IsValid(emit_pdf)) {
                         NEERecord nee;
-                        nee.shadow_ray_dir   = emitter_sample_record.wi;
-                        nee.shadow_ray_o     = geo.position;
-                        nee.shadow_ray_t_max = emitter_sample_record.distance - 0.0001f;
+                        nee.shadow_ray_dir    = emitter_sample_record.wi;
+                        nee.shadow_ray_origin = geo.position;
+                        nee.shadow_ray_t_max  = emitter_sample_record.distance - 0.0001f;
 
                         float NoL = abs(dot(geo.normal, emitter_sample_record.wi));
                         float mis = emitter_sample_record.is_delta ? 1.f : optix::MISWeight(emitter_sample_record.pdf, bsdf_eval_pdf);
 
                         nee.radiance = emitter_sample_record.radiance * throughput * bsdf_eval_f * NoL * mis / emit_pdf;
 
-                        g_data->nee_record[pixel_index] = nee;
-                        g_data->shadow_ray_index.Push(pixel_index);
+                        auto shadow_ray_record = g_data->nee_record.Alloc();
+                        shadow_ray_record.shadow_ray_t_max(nee.shadow_ray_t_max);
+                        shadow_ray_record.shadow_ray_dir(nee.shadow_ray_dir);
+                        shadow_ray_record.shadow_ray_origin(nee.shadow_ray_origin);
+                        shadow_ray_record.radiance(nee.radiance);
+                        shadow_ray_record.pixel_index(pixel_index);
                     }
                 }
 
@@ -131,12 +138,16 @@ namespace wf {
                         record.ray_dir    = optix::ToWorld(bsdf_sample_record.wi, geo.normal);
                         record.ray_origin = geo.position;
 
-                        g_data->path_record[pixel_index] = record;
-                        g_data->ray_index.Push(pixel_index);
+                        auto next_path = g_data->path_record.Alloc();
+                        next_path.ray_dir(record.ray_dir);
+                        next_path.ray_origin(record.ray_origin);
+                        next_path.throughput(throughput);
+                        next_path.bsdf_sample_pdf(record.bsdf_sample_pdf);
+                        next_path.bsdf_sample_type(record.bsdf_sample_type);
+                        next_path.random_seed(random.GetSeed());
+                        next_path.pixel_index(pixel_index);
                     }
                 }
-
-                g_data->throughput[pixel_index] = throughput;
             },
             stream);
     }

@@ -196,49 +196,25 @@ namespace wf {
                     desc.flag = EBufferFlag::AllowDisplay;
                     m_impl->optix_launch_params.frame_buffer.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, m_impl->output_pixel_num);
 
-                    desc.name           = "random";
-                    desc.flag           = EBufferFlag::None;
-                    desc.stride_in_byte = sizeof(cuda::Random);
-                    m_impl->optix_launch_params.random.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, m_impl->output_pixel_num);
-
-                    desc.name           = "throughput";
-                    desc.stride_in_byte = sizeof(float3);
-                    m_impl->optix_launch_params.throughput.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, m_impl->output_pixel_num);
-
-                    desc.name           = "path_record";
-                    desc.flag           = EBufferFlag::None;
-                    desc.stride_in_byte = sizeof(wf::PathRecord);
-                    m_impl->optix_launch_params.path_record.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, m_impl->output_pixel_num);
-
-                    desc.name           = "hit_record";
-                    desc.flag           = EBufferFlag::None;
-                    desc.stride_in_byte = sizeof(wf::HitRecord);
-                    m_impl->optix_launch_params.hit_record.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, m_impl->output_pixel_num);
-
-                    desc.name           = "nee_record";
-                    desc.flag           = EBufferFlag::None;
-                    desc.stride_in_byte = sizeof(wf::NEERecord);
-                    m_impl->optix_launch_params.nee_record.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, m_impl->output_pixel_num);
-                }
-
-                {
-
                     CUDA_CHECK(cudaMallocAsync(
                         reinterpret_cast<void**>(&m_impl->dynamic_array_cnt_buffer),
                         sizeof(unsigned int) * 3,
                         *m_impl->stream));
 
-                    BufferDesc desc{
-                        .name           = "ray index",
-                        .flag           = EBufferFlag::None,
-                        .width          = static_cast<uint32_t>(m_impl->scene->film_w * m_impl->scene->film_h),
-                        .height         = 1,
-                        .stride_in_byte = sizeof(unsigned int)};
-                    m_impl->optix_launch_params.ray_index.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, m_impl->dynamic_array_cnt_buffer);
-                    desc.name = "hit index";
-                    m_impl->optix_launch_params.hit_index.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, m_impl->dynamic_array_cnt_buffer + sizeof(unsigned int));
-                    desc.name = "shadow ray index";
-                    m_impl->optix_launch_params.shadow_ray_index.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, m_impl->dynamic_array_cnt_buffer + sizeof(unsigned int) * 2);
+                    desc.name           = "path_record";
+                    desc.flag           = EBufferFlag::None;
+                    desc.stride_in_byte = sizeof(wf::PathRecord);
+                    m_impl->optix_launch_params.path_record.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, m_impl->output_pixel_num, m_impl->dynamic_array_cnt_buffer);
+
+                    desc.name           = "hit_record";
+                    desc.flag           = EBufferFlag::None;
+                    desc.stride_in_byte = sizeof(wf::HitRecord);
+                    m_impl->optix_launch_params.hit_record.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, m_impl->output_pixel_num, m_impl->dynamic_array_cnt_buffer + sizeof(unsigned int));
+
+                    desc.name           = "nee_record";
+                    desc.flag           = EBufferFlag::None;
+                    desc.stride_in_byte = sizeof(wf::NEERecord);
+                    m_impl->optix_launch_params.nee_record.SetData(buf_mngr->AllocBuffer(desc)->cuda_ptr, m_impl->output_pixel_num, m_impl->dynamic_array_cnt_buffer + sizeof(unsigned int) * 2);
                 }
 
                 m_impl->optix_launch_params.handle = m_impl->scene->GetIASHandle(1, true);
@@ -288,18 +264,11 @@ namespace wf {
                         sbt->BindData("miss shadow", nullptr);
 
                         for (auto i = 0u; i < instance_num; i++) {
-                            HitGroupData hit;
-                            hit.geo = instances[i].shape->GetOptixGeometry();
-                            hit.mat = instances[i].material->GetOptixMaterial();
+                            auto geo = instances[i].shape->GetOptixGeometry();
 
-                            // if (instances[i].emitter != nullptr) {
-                            //     hit.emitter_index = m_impl->scene->GetEmitterIndex(instances[i].emitter);
-                            // } else
-                            //     hit.emitter_index = -1;
-
-                            if (hit.geo.type == optix::Geometry::EType::TriMesh) {
+                            if (geo.type == optix::Geometry::EType::TriMesh) {
                                 sbt->BindData("hit shadow", nullptr, i);
-                            } else if (hit.geo.type == optix::Geometry::EType::Sphere) {
+                            } else if (geo.type == optix::Geometry::EType::Sphere) {
                                 sbt->BindData("hit shadow sphere", nullptr, i);
                             } else {
                                 sbt->BindData("hit shadow curve", nullptr, i);
